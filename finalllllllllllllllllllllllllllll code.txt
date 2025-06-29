@@ -1,0 +1,133 @@
+!pip install librosa soundfile numpy pandas scikit-learn gradio
+---------------------------------------------------------------------------------------------
+
+!wget --no-check-certificate -O RAVDESS.zip "https://zenodo.org/record/1188976/files/Audio_Speech_Actors_01-24.zip?download=1"
+!unzip RAVDESS.zip -d ravdess
+
+---------------------------------------------------------------------------------------------
+import os
+import librosa
+import pandas as pd
+
+features = []
+emotions = []
+data_path = "/content/ravdess"
+
+emotion_map = {
+    '01': 'neutral', '02': 'calm', '03': 'happy', '04': 'sad',
+    '05': 'angry', '06': 'fearful', '07': 'disgust', '08': 'surprised'
+}
+
+for root, _, files in os.walk(data_path):
+    for file in files:
+        if file.endswith(".wav"):
+            file_path = os.path.join(root, file)
+            y, sr = librosa.load(file_path, duration=3, offset=0.5)
+            mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
+            mfccs_scaled = mfccs.mean(axis=1)
+            features.append(mfccs_scaled)
+            emotion_code = file.split("-")[2]
+            emotions.append(emotion_map.get(emotion_code, "unknown"))
+
+df = pd.DataFrame(list(zip(features, emotions)), columns=['feature', 'emotion'])
+print("Total rows:", len(df))
+df.head()
+---------------------------------------------------------------------------------------------
+from sklearn.model_selection import train_test_split
+import numpy as np
+
+X = np.array(df['feature'].tolist())
+y = np.array(df['emotion'])
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+------------------------------------------------------------------------------------------
+
+from sklearn.neural_network import MLPClassifier
+
+model = MLPClassifier(hidden_layer_sizes=(128, 64), max_iter=500, activation='relu', solver='adam')
+model.fit(X_train, y_train)
+
+-------------------------------------------------------------------------------------------
+
+from sklearn.metrics import classification_report, accuracy_score
+
+y_pred = model.predict(X_test)
+print("Accuracy:", accuracy_score(y_test, y_pred))
+print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+-------------------------------------------------------------------------------------------
+
+import joblib
+joblib.dump(model, "emotion_voice_model.pkl")
+
+-------------------------------------------------------------------------------------------
+import numpy as np
+import librosa
+import joblib
+
+model = joblib.load("emotion_voice_model.pkl")
+
+def predict_emotion(audio_path):
+    y, sr = librosa.load(audio_path, duration=3, offset=0.5)
+    mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
+    mfccs_scaled = mfccs.mean(axis=1).reshape(1, -1)
+    return model.predict(mfccs_scaled)[0]
+
+-------------------------------------------------------------------------------------------
+from google.colab import files
+from IPython.display import Audio, display
+
+emotion_explanations = {
+    "neutral": "You seem calm and balanced.",
+    "calm": "Peaceful tone detected. Great state of mind!",
+    "happy": "You're in a joyful mood. Keep smiling!",
+    "sad": "A hint of sadness. Try some self-care or talk to a friend.",
+    "angry": "Frustration noticed. Take deep breaths or go for a walk.",
+    "fearful": "You sound anxious or afraid. You're not alone—consider talking to someone.",
+    "disgust": "Displeasure detected. Try to reflect or shift focus.",
+    "surprised": "A tone of surprise! Something unexpected, huh?"
+}
+
+print("Upload a voice clip in .wav format (recorded or from RAVDESS):")
+uploaded = files.upload()
+
+for file_name in uploaded.keys():
+    display(Audio(file_name))
+    predicted = predict_emotion(file_name)
+    explanation = emotion_explanations.get(predicted, "Emotion detected.")
+    from IPython.display import HTML
+    display(HTML(f"""
+    <div style="padding:15px; background-color:powderblue; border-radius:10px; border:1px solid black;">
+      <h2 style="color:darkblue;">Detected Emotion: <span style="color:black;">{predicted.upper()}</span></h2>
+      <p style="color:darkblue;">{explanation}</p>
+    </div>
+    """))
+
+-------------------------------------------------------------------------------------------
+
+import gradio as gr
+
+model = joblib.load("emotion_voice_model.pkl")
+
+def gradio_predict(audio_file):
+    y, sr = librosa.load(audio_file, duration=3, offset=0.5)
+    mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
+    mfccs_scaled = mfccs.mean(axis=1).reshape(1, -1)
+    prediction = model.predict(mfccs_scaled)[0]
+    if prediction in ['sad', 'angry', 'fearful']:
+        note = "⚠️ This may indicate a negative emotional state."
+    else:
+        note = "✅ This may indicate a positive or stable emotional state."
+    return f"Predicted Emotion: {prediction}\n{note}"
+
+ui = gr.Interface(
+    fn=gradio_predict,
+    inputs=gr.Audio(type="filepath", label="Upload Your Voice (.wav)"),
+    outputs=gr.Textbox(label="Emotion Result"),
+    title="Mental Health Checker (Voice-based)",
+    description="Upload a short voice clip to analyze emotional tone."
+)
+
+ui.launch(share=True)
+
